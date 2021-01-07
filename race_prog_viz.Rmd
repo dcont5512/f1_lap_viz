@@ -1,0 +1,131 @@
+```{r}
+## load libraries
+library(tidyverse)
+library(extrafont)
+library(scales)
+library(cowplot)
+library(gridExtra)
+library(grid)
+```
+
+```{r}
+## load data
+load("data/dat.RData")
+
+## join relevant tables and keep only relevant data
+dat <- dat[["races"]] %>% 
+  filter(year >= 2014) %>% 
+  inner_join(dat[["lap_times"]], by = "raceId") %>% 
+  inner_join(dat[["drivers"]], by = "driverId") %>% 
+  rename(pos = position) %>%
+  inner_join(dat[["qualifying"]], by = c("raceId", "driverId")) %>% 
+  inner_join(dat[["constructors"]] %>% 
+               select(constructorId, team = name), by = c("constructorId")) %>% 
+  select(season = year, race = name, round, team, driver = surname, qual_pos = position, lap, pos)
+
+## create row for position at start (i.e. factor in qualifying)
+dat <- dat %>% 
+  select(-qual_pos) %>% 
+  rbind(dat %>% 
+          mutate(lap = 0,
+                 pos = qual_pos) %>% 
+          distinct(season, race, round, team, driver, lap, pos)) 
+
+## fix starting entries for people that begin in pit lane
+dat <- dat %>% 
+  filter(lap == 0) %>%
+  arrange(season, race, pos) %>% 
+  group_by(season, race) %>% 
+  mutate(pos = row_number()) %>% 
+  ungroup %>% 
+  rbind(dat %>% 
+          filter(lap != 0)) %>% 
+  arrange(season, round, lap, pos)
+```
+
+```{r}
+## plot function
+plot_func <- function(x, y) {
+  ## subset data
+  df <- dat %>%
+    filter(season == y & race == x)
+  ## isolate labels
+  label_round <- df %>% distinct(round)
+  label_switches <- df %>% 
+    select(driver, lap, pos) %>% 
+    group_by(driver) %>% 
+    mutate(pos_next = pos - lead(pos),
+           pos_change = ifelse(pos_next != 0, 1, 0)) %>% 
+    ungroup %>% 
+    summarise(pos_change_total = sum(pos_change, na.rm = T)) %>% 
+    .$pos_change_total %>% 
+    sum
+  lap_min <- df %>% .$lap %>% min
+  lap_max <- df %>% .$lap %>% max
+  n_racers <- df %>% distinct(driver) %>% nrow
+  ## render plot
+  df %>% 
+    ggplot(aes(x = lap, y = pos, color = driver)) +
+    geom_line(size = 0.7) +
+    ggtitle(label = x,
+            subtitle = paste0("Round: ", label_round,
+                              "  |  Laps: ", lap_max, 
+                              "  |  Number of Position Changes: ", label_switches)) +
+    labs(x = "Lap") +
+    scale_y_reverse(breaks = 1:n_racers,
+                    labels = function(x) {
+                      df$driver[df$lap == 0][order(df$pos[df$lap == 0])][x]
+                    },
+                    sec.axis = sec_axis(function(x) x, breaks = 1:n_racers, labels = label_ordinal())) +
+    scale_x_continuous(breaks = seq(lap_min, lap_max, by = 5), expand = c(0.005, 1)) +
+    theme(plot.title = element_text(family = "Formula1 Display Wide", size = 8, color = "white"),
+          plot.subtitle = element_text(family = "Formula1 Display Regular", size = 7, color = "white"),
+          axis.title = element_text(family = "Formula1 Display Regular", size = 6, color = "white", vjust = 8),
+          axis.title.y = element_blank(),
+          axis.text = element_text(family = "Formula1 Display Regular", size = 6, color = "white"),
+          axis.ticks = element_line(colour = 'white', size = 0.1),
+          axis.ticks.y = element_blank(),
+          legend.position = "none",
+          plot.background = element_rect(fill = "#232b2b", color = NA),
+          panel.background = element_rect(fill = "#232b2b", color = NA),
+          panel.grid = element_blank(),
+          plot.title.position = "plot") +
+    scale_color_manual(values = c("#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", 
+                                  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe", 
+                                  "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000", 
+                                  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080"))
+}
+```
+
+```{r}
+label_func <- function(text, family, size) {
+  ggdraw() +
+    draw_label(label = text,
+               fontfamily = family,
+               size = size,
+               color = "white",
+               x = 0.015,
+               hjust = 0,
+               lineheight = 1)
+}
+
+title_text <- "2020 F1 Races with Most (and Least)\nTotal End-of-Lap Position Changes\n"
+subtitle_text <- "The 2020 Formula 1 season was a resounding success; after getting off to a late\nstart, the shortened 17-race season provided fans with some of the most exciting\nracing that the sport had seen in years. The season saw 13 different drivers stand\natop an F1 podium from 6 different teams, two of whom were first-time victors.\nLike all F1 seasons, some races had fan’s hearts racing and fists clenched, while\nothers would have been better spent watching water boil. When comparing races\nby total number of position changes over the past five years, the season-opening\nAustralian Grand Prix usually takes home the prize for the least number of position\nchanges, with an average of 122, while the Bahrian Grand Prix lays claim to the\nlargest number of position changes, with an average of 265 over this same period.\n\nThe 2020 Australian Grand Prix was cancelled due to the coronavirus pandemic, as\nwas the usually boring Monaco Grand Prix. In lieu of these two races, the season's\nmost uneventful was the British Grand Prix at Silverstone, which had a total of 114\nposition changes. Yet as has come to be expected, the Bahrain Grand Prix did not\ndisappoint. Although the second race at the modified Bahrain International Circuit\nwas arguably more exciting, the first race saw a total of 293 position changes over\nits 57 laps. The charts below show each driver's progression during these two races\nby showing what position they were in at the end of each lap.\n" 
+caption_text <- "Data: Ergast Developer API  |  Visualization: Dominic Contreras  |  Code: github.com/dcont5512"
+```
+
+```{r, fig.width = 6, fig.height = 10}
+plot_grid(label_func(title_text, "Formula1 Display Wide", 9.5), 
+          label_func(subtitle_text, "Formula1 Display Regular", 8), 
+          plot_grid(plot_func("British Grand Prix", 2020), 
+                    plot_func("Bahrain Grand Prix", 2020),
+                    ncol = 1), 
+          label_func(caption_text, "Formula1 Display Regular", 5),
+          ncol = 1, rel_heights = c(0.25, 1.15, 3.5, 0.1)) + 
+  theme(plot.background = element_rect(fill = "#232b2b"))
+```
+
+
+
+
+
